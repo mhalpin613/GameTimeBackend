@@ -17,69 +17,131 @@ const io = new Server(server, {
 });
 
 const BOT = 'Bot';
-let users = [];
+const activeRooms = {};
 
 io.on('connection', (socket) => {
+
     console.log(`${socket.id} just connected.`);
 
-    socket.on('join-room', (data) => {
-
+    socket.on('create-game', (data) => {
         const { userName, roomName } = data;
 
-        if (users.filter(user => user.roomName === roomName).length >= 2) {
+        if (activeRooms[roomName]) {
+            socket.emit('room-already-exists');
+            return;
+        }
+
+        else {
+
+            const room = {
+                roomName: roomName,
+                users: [{ id: socket.id, userName: userName }]
+            }
+            activeRooms[roomName] = room;
+    
+            console.log(`${userName} has created room: ${roomName}`)
+            
+            socket.join(roomName);
+            socket.emit('user-joined', data);
+
+        }
+    });
+
+    socket.on('join-game', (data) => {
+
+        const { userName, roomName } = data;
+        const room = activeRooms[roomName];
+
+        if (!room) {
+            socket.emit('room-not-found');
+            return
+        }
+
+        if (room.users.length >= 2) {
             socket.emit('room-full');
             return;
         }
 
         socket.join(roomName);
+        room.users.push({ id: socket.id, userName });
 
-        users.push({userName, id: socket.id, roomName});
-        console.log(users);
-          
-        socket.to(roomName).emit('receive-message', {
-            message: `${userName} has joined the chat`,
-            userName: BOT,
-        });
-        // Send welcome msg to user that just joined chat only
-        socket.emit('receive-message', {
-            message: `${userName} has joined the chat`,
-            userName: BOT,
-        });
+        socket.emit('user-joined', data);
+        io.in(roomName).emit('user-joined', data);
 
-        if (io.sockets.adapter.rooms.get(roomName).size === 2) {
-            socket.emit('both-connected', users)
-            socket.to(roomName).emit('both-connected', users)
+        socket.in(roomName).emit('get-chat', {
+            message: `${userName} has joined the chat`,
+            userName: BOT
+        })
+
+        console.log(`User ${userName} joined room ${roomName}`);
+
+        if (room.users.length === 2) {
+            socket.to(roomName).emit('both-connected', room.users);
         }
 
     });
 
-    socket.on('send-message', (data) => {
-        io.in(data.roomName).emit('receive-message', data);
+    socket.on('request-username', (data) => {
+        socket.in(data.roomName).emit('give-username', data.userName);
     });
 
-    // todo functionality for only allowing rooms of 2
-    socket.on('leave-room', (data) => {
-        const { userName, roomName } = data;
-        socket.leave(roomName);
-        users = users.filter((user) => user.id != socket.id);
-        socket.to(roomName).emit('receive-message', {
-            userName: BOT,
-            message: `${userName} has left the chat`,
-        });
-        console.log(`${userName} has left the chat`);
+    socket.on('send-chat', (data) => {
+        io.in(data.roomName).emit('get-chat', data);
     });
+
+    socket.on('leave-game', (data) => {
+
+        const { roomName, userName } = data;
+        const room = activeRooms[roomName];
+
+        if (room) {
+            room.users = room.users.filter((user) => user.id !== socket.id);
+            socket.leave(room.roomName);
+            console.log(`User ${userName} left room ${roomName}`);
+
+            socket.in(roomName).emit('get-chat', {
+                message: `${userName} has left the chat`,
+                userName: BOT
+            });
+
+            // If the room is empty, remove it from the active rooms
+            if (room.users.length === 0) {
+                delete activeRooms[room.roomName];
+                console.log(`Room ${room.roomName} is now empty and closed`);
+            }
+        }
+    })
     
     socket.on('disconnect', () => {
         console.log(`${socket.id} has disconnected`);
-        const user = users.find((user) => user.id == socket.id);
-        if (user?.userName) {
-            users = users.filter((user) => user.id != socket.id);
-            socket.to(user.roomName).emit('receive-message', {
-                userName: BOT,
-                message: `${user.userName} has disconnected from the chat.`,
+        // Find the room containing the disconnected user
+        const room = Object.values(activeRooms).find((r) =>
+            r.users.some((user) => user.id === socket.id)
+        );
+
+        if (room) {
+            
+            let disconnectedUser;
+            room.users.forEach(user => {
+                if (user.id === socket.id) disconnectedUser = user;
             });
+
+            // Remove the user from the room
+            room.users = room.users.filter((user) => user.id !== socket.id);
+
+            socket.in(room.roomName).emit('get-chat', {
+                message: `${disconnectedUser.userName} has disconnected`,
+                userName: BOT
+            });
+
+            // If the room is empty, remove it from the active rooms
+            if (room.users.length === 0) {
+                delete activeRooms[room.roomName];
+                console.log(`Room ${room.roomName} is now empty and closed`);
+            }
         }
     });
+
 });
 
 app.get('/', (req, res) => {
