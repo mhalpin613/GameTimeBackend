@@ -16,6 +16,7 @@ const io = new Server(server, {
     }
 });
 
+// todo refresh, game(s)
 const BOT = 'Bot';
 const activeRooms = {};
 
@@ -42,7 +43,7 @@ io.on('connection', (socket) => {
             console.log(`${userName} has created room: ${roomName}`)
             
             socket.join(roomName);
-            socket.emit('user-joined', data);
+            socket.emit('joined', data);
 
         }
     });
@@ -65,8 +66,16 @@ io.on('connection', (socket) => {
         socket.join(roomName);
         room.users.push({ id: socket.id, userName });
 
-        socket.emit('user-joined', data);
-        io.in(roomName).emit('user-joined', data);
+        socket.emit('joined', data);
+        io.in(roomName).emit('joined', data);
+
+        const opponent = room.users.find((user) => user.id !== socket.id);
+        io.in(roomName).emit('user-joined', { userName });
+        socket.emit('user-joined', { userName: opponent.userName });
+
+        if (room.users.length === 2) {
+            io.in(roomName).emit('both-connected', room.users);
+        }
 
         socket.in(roomName).emit('get-chat', {
             message: `${userName} has joined the chat`,
@@ -75,14 +84,6 @@ io.on('connection', (socket) => {
 
         console.log(`User ${userName} joined room ${roomName}`);
 
-        if (room.users.length === 2) {
-            socket.to(roomName).emit('both-connected', room.users);
-        }
-
-    });
-
-    socket.on('request-username', (data) => {
-        socket.in(data.roomName).emit('give-username', data.userName);
     });
 
     socket.on('send-chat', (data) => {
@@ -104,13 +105,15 @@ io.on('connection', (socket) => {
                 userName: BOT
             });
 
+            socket.in(room.roomName).emit('remove-opp');
+
             // If the room is empty, remove it from the active rooms
             if (room.users.length === 0) {
                 delete activeRooms[room.roomName];
                 console.log(`Room ${room.roomName} is now empty and closed`);
             }
         }
-    })
+    });
     
     socket.on('disconnect', () => {
         console.log(`${socket.id} has disconnected`);
@@ -134,12 +137,47 @@ io.on('connection', (socket) => {
                 userName: BOT
             });
 
+            socket.in(room.roomName).emit('remove-opp');
+
             // If the room is empty, remove it from the active rooms
             if (room.users.length === 0) {
                 delete activeRooms[room.roomName];
                 console.log(`Room ${room.roomName} is now empty and closed`);
             }
         }
+    });
+
+    socket.on('call-user', data => {
+        console.log('calling user')
+        // todo emitting to is not working
+        io.to(data.userToCall).emit('ringing', {
+            signal: data.signalData, 
+            from: data.from,
+        });
+    });
+
+    socket.on('accept-call', data => {
+        console.log('accepted call')
+        console.log('emmitting to ' + data.to)
+        io.to(data.to).emit('call-accepted', data.signal);
+    });
+
+    socket.on('start-game', data => {
+        socket.emit('started', data.goFirst);
+        socket.to(data.oppId).emit('started', !data.goFirst);
+    });
+
+    socket.on('update', data => {
+        const { board, oppId, winner } = data;
+        socket.to(oppId).emit('board-state', { board, winner });
+    });
+
+    socket.on('game-winner', data => {
+        socket.to(data.roomName).emit('give-winner', data.winner);
+    })
+
+    socket.on('restart', opp => {
+        socket.to(opp).emit('handle-restart');
     });
 
 });
