@@ -129,6 +129,8 @@ io.on('connection', (socket) => {
                 if (user.id === socket.id) disconnectedUser = user;
             });
 
+            socket.in(room.roomName).emit('end-call');
+
             // Remove the user from the room
             room.users = room.users.filter((user) => user.id !== socket.id);
 
@@ -168,13 +170,13 @@ io.on('connection', (socket) => {
     });
 
     socket.on('update', data => {
-        const { board, oppId, winner } = data;
-        socket.to(oppId).emit('board-state', { board, winner });
+        const { board, oppId } = data;
+        socket.to(oppId).emit('board-state', board);
     });
 
-    socket.on('game-winner', data => {
-        socket.to(data.roomName).emit('give-winner', data.winner);
-    })
+    socket.on('give-winner', data => {
+        socket.to(data.oppId).emit('winner', data.winner);
+    });
 
     socket.on('restart', opp => {
         socket.to(opp).emit('handle-restart');
